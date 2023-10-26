@@ -13,6 +13,13 @@
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toTopOf="@id/uploadModelButton" />
 
+    <ImageView
+        android:id="@+id/processedImageView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scaleType="fitCenter"
+        android:visibility="visible" />
+
     <Button
         android:id="@+id/uploadModelButton"
         android:layout_width="0dp"
