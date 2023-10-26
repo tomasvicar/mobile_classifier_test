@@ -130,7 +130,9 @@ public class MainActivity extends AppCompatActivity {
         preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
         ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
-                .setTargetResolution(new Size(765,1020))
+//                .setTargetResolution(new Size(224,224))
+//                .setTargetResolution(new Size(765,1020))
+                .setTargetResolution(new Size(3060,4080 ))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build();
 
@@ -184,13 +186,15 @@ public class MainActivity extends AppCompatActivity {
         Bitmap originalBitmap = imageProxyToBitmap(image);
 
         // Resize Bitmap to 256x256
-        Bitmap resizedBitmap = resizeBitmapTo256x256(originalBitmap);
+//        Bitmap resizedBitmap = resizeBitmapTo256x256(originalBitmap);
 
         // Center Crop to 224x224
-        Bitmap croppedBitmap = centerCropTo224x224(resizedBitmap);
+//        Bitmap croppedBitmap = centerCropTo224x224(resizedBitmap);
+
+        Bitmap resizedBitmap = resizeBitmapTo224x224(originalBitmap);
 
         // Convert cropped Bitmap to Tensor
-        Tensor inputTensor = bitmapToFloat32Tensor(croppedBitmap, mean_norm, std_norm);
+        Tensor inputTensor = bitmapToFloat32Tensor(resizedBitmap, mean_norm, std_norm);
 
 
 
@@ -263,30 +267,49 @@ public class MainActivity extends AppCompatActivity {
 
 
 
-    private Bitmap resizeBitmapTo256x256(Bitmap source) {
-        float scale;
-        int newWidth;
-        int newHeight;
-
-        if (source.getWidth() > source.getHeight()) {
-            // landscape or square
-            scale = 256.0f / source.getHeight();
-            newWidth = Math.round(source.getWidth() * scale);
-            newHeight = 256;
-        } else {
-            // portrait
-            scale = 256.0f / source.getWidth();
-            newHeight = Math.round(source.getHeight() * scale);
-            newWidth = 256;
-        }
-        return Bitmap.createScaledBitmap(source, newWidth, newHeight, false);
+//    private Bitmap resizeBitmapTo256x256(Bitmap source) {
+//        float scale;
+//        int newWidth;
+//        int newHeight;
+//
+//        if (source.getWidth() > source.getHeight()) {
+//            // landscape or square
+//            scale = 256.0f / source.getHeight();
+//            newWidth = Math.round(source.getWidth() * scale);
+//            newHeight = 256;
+//        } else {
+//            // portrait
+//            scale = 256.0f / source.getWidth();
+//            newHeight = Math.round(source.getHeight() * scale);
+//            newWidth = 256;
+//        }
+//        return Bitmap.createScaledBitmap(source, newWidth, newHeight, false);
     }
 
-    private Bitmap centerCropTo224x224(Bitmap source) {
-        int x = (source.getWidth() - 224) / 2;
-        int y = (source.getHeight() - 224) / 2;
-        return Bitmap.createBitmap(source, x, y, 224, 224);
+    private Bitmap resizeBitmapTo224x224(Bitmap source) {
+//        float scale;
+//        int newWidth;
+//        int newHeight;
+
+//        if (source.getWidth() > source.getHeight()) {
+//            // landscape or square
+//            scale = 224.0f / source.getHeight();
+//            newWidth = Math.round(source.getWidth() * scale);
+//            newHeight = 224;
+//        } else {
+//            // portrait
+//            scale = 224.0f / source.getWidth();
+//            newHeight = Math.round(source.getHeight() * scale);
+//            newWidth = 224;
+//        }
+        return Bitmap.createScaledBitmap(source, 224, 224, true);
     }
+
+//    private Bitmap centerCropTo224x224(Bitmap source) {
+//        int x = (source.getWidth() - 224) / 2;
+//        int y = (source.getHeight() - 224) / 2;
+//        return Bitmap.createBitmap(source, x, y, 224, 224);
+//    }
 
     private Tensor bitmapToFloat32Tensor(Bitmap bitmap, float[] mean, float[] std) {
         int width = bitmap.getWidth();
