@@ -50,6 +50,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ExecutionException;
@@ -75,6 +76,9 @@ public class MainActivity extends AppCompatActivity {
 
     private static final int REQUEST_CODE_SELECT_MODEL = 1;
     private static final int REQUEST_CODE_SELECT_CLASSES = 2;
+
+//    private static final int FRAME_BUFFER_SIZE = 3;
+//    private LinkedList<Bitmap> frameBuffer = new LinkedList<>();
 
     private ListenableFuture<ProcessCameraProvider> cameraProviderFuture;
 
@@ -151,7 +155,7 @@ public class MainActivity extends AppCompatActivity {
         preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
         ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
-//                .setTargetResolution(new android.util.Size(224,224))
+//                .setTargetResolution(new android.util.Size(256,256))
                 .setTargetResolution(new android.util.Size(765,1020))
 //                .setTargetResolution(new android.util.Size(3060,4080))
 //                .setTargetResolution(new android.util.Size(224,224))
@@ -198,43 +202,81 @@ public class MainActivity extends AppCompatActivity {
         float[] mean_norm = TensorImageUtils.TORCHVISION_NORM_MEAN_RGB;
         float[] std_norm = TensorImageUtils.TORCHVISION_NORM_STD_RGB;
 
-//        float[] mean_norm = TensorImageUtils.TORCHVISION_NORM_MEAN_RGB;
-//        float[] std_norm = TensorImageUtils.TORCHVISION_NORM_STD_RGB;
+//        @SuppressLint("UnsafeOptInUsageError") Tensor inputTensor = TensorImageUtils.imageYUV420CenterCropToFloat32Tensor(Objects.requireNonNull(image.getImage()),
+//                rotation, 224, 224,
+//                mean_norm, std_norm);
+
 
         Bitmap originalBitmap = imageProxyToBitmap(image);
 
-        Bitmap rotatedBitmap = rotateBitmap(originalBitmap, rotation);
+        Bitmap rotatedBitmap = rotateBitmap(originalBitmap, rotation - 90);
 
-        Bitmap resizedBitmap = resizeBitmapTo224x224(rotatedBitmap);
+//        Bitmap resizedBitmap = resizeBitmapTo224x224(rotatedBitmap);
 
 
+        Bitmap resizedBitmap = resizeBitmapTo256x256(rotatedBitmap);
 
-        // Convert cropped Bitmap to Tensor
-        Tensor inputTensor = bitmapToFloat32Tensor(resizedBitmap, mean_norm, std_norm);
+        Bitmap cropedBitmap = centerCropTo224x224(resizedBitmap);
 
-        Bitmap inputTensor_bitmap = tensorToBitmap(inputTensor);
+//        frameBuffer.addLast(cropedBitmap);
+//        if (frameBuffer.size() > FRAME_BUFFER_SIZE) {
+//            frameBuffer.removeFirst();
+//        }
 
-        Tensor outputTensor = module.forward(IValue.from(inputTensor)).toTensor();
-        float[] scores = outputTensor.getDataAsFloatArray();
-        float maxScore = -Float.MAX_VALUE;
-        int maxScoreIdx = -1;
-        for (int i = 0; i < scores.length; i++) {
-            if (scores[i] > maxScore) {
-                maxScore = scores[i];
-                maxScoreIdx = i;
+        if (true) {
+//        if (frameBuffer.size() == FRAME_BUFFER_SIZE) {
+            // Convert cropped Bitmap to Tensor
+//            Bitmap averageBitmap = computeAverageFrame(frameBuffer);
+            Tensor inputTensor = bitmapToFloat32Tensor(cropedBitmap, mean_norm, std_norm);
+
+            Bitmap inputTensor_bitmap_tmp = tensorToBitmap(inputTensor);
+            Bitmap inputTensor_bitmap = rotateBitmap(inputTensor_bitmap_tmp, +90);
+
+            Tensor outputTensor = module.forward(IValue.from(inputTensor)).toTensor();
+            float[] scores = outputTensor.getDataAsFloatArray();
+            float maxScore = -Float.MAX_VALUE;
+            int maxScoreIdx = -1;
+            for (int i = 0; i < scores.length; i++) {
+                if (scores[i] > maxScore) {
+                    maxScore = scores[i];
+                    maxScoreIdx = i;
+                }
             }
+            String classResult = classes.get(maxScoreIdx);
+            Log.v("Torch", "Detected " + classResult);
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    processedImageView.setImageBitmap(inputTensor_bitmap);
+                    textView.setText(classResult);
+                }
+            });
         }
-        String classResult = classes.get(maxScoreIdx);
-        Log.v("Torch", "Detected " + classResult);
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                processedImageView.setImageBitmap(inputTensor_bitmap);
-                textView.setText(classResult);
-            }
-        });
 
     }
+
+//    private Bitmap computeAverageFrame(LinkedList<Bitmap> frameBuffer) {
+//        int width = frameBuffer.getFirst().getWidth();
+//        int height = frameBuffer.getFirst().getHeight();
+//        int[] avgPixels = new int[width * height];
+//
+//        for (Bitmap frame : frameBuffer) {
+//            int[] framePixels = new int[width * height];
+//            frame.getPixels(framePixels, 0, width, 0, 0, width, height);
+//
+//            for (int i = 0; i < framePixels.length; i++) {
+//                avgPixels[i] += framePixels[i];
+//            }
+//        }
+//
+//        // Divide by the buffer size to get the average
+//        for (int i = 0; i < avgPixels.length; i++) {
+//            avgPixels[i] /= FRAME_BUFFER_SIZE;
+//        }
+//
+//        return Bitmap.createBitmap(avgPixels, width, height, Bitmap.Config.ARGB_8888);
+//    }
+
 
     List<String> LoadClasses(String fileName){
         List<String> classes = new ArrayList<>();
@@ -290,6 +332,33 @@ public class MainActivity extends AppCompatActivity {
     }
 
 
+    private Bitmap centerCropTo224x224(Bitmap source) {
+        int x = (source.getWidth() - 224) / 2;
+        int y = (source.getHeight() - 224) / 2;
+        return Bitmap.createBitmap(source, x, y, 224, 224);
+    }
+
+        private Bitmap resizeBitmapTo256x256(Bitmap source) {
+        float scale;
+        int newWidth;
+        int newHeight;
+
+        if (source.getWidth() > source.getHeight()) {
+            // landscape or square
+            scale = 256.0f / source.getHeight();
+            newWidth = Math.round(source.getWidth() * scale);
+            newHeight = 256;
+        } else {
+            // portrait
+            scale = 256.0f / source.getWidth();
+            newHeight = Math.round(source.getHeight() * scale);
+            newWidth = 256;
+        }
+        return Bitmap.createScaledBitmap(source, newWidth, newHeight, false);
+}
+
+
+
     private Tensor bitmapToFloat32Tensor(Bitmap bitmap, float[] mean, float[] std) {
 //        int width = bitmap.getWidth();
 //        int height = bitmap.getHeight();
@@ -304,29 +373,7 @@ public class MainActivity extends AppCompatActivity {
         return Bitmap.createBitmap(source, 0, 0, source.getWidth(), source.getHeight(), matrix, true);
     }
 
-//    private Bitmap imageProxyToBitmap(ImageProxy image) {
-//        @SuppressLint("UnsafeOptInUsageError")
-//        Image.Plane[] planes = image.getImage().getPlanes();
-//        ByteBuffer yBuffer = planes[0].getBuffer();
-//        ByteBuffer uBuffer = planes[1].getBuffer();
-//        ByteBuffer vBuffer = planes[2].getBuffer();
-//
-//        int ySize = yBuffer.remaining();
-//        int uSize = uBuffer.remaining();
-//        int vSize = vBuffer.remaining();
-//
-//        byte[] nv21 = new byte[ySize + uSize + vSize];
-//        //U and V are swapped
-//        yBuffer.get(nv21, 0, ySize);
-//        vBuffer.get(nv21, ySize, vSize);
-//        uBuffer.get(nv21, ySize + vSize, uSize);
-//
-//        YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, image.getWidth(), image.getHeight(), null);
-//        ByteArrayOutputStream out = new ByteArrayOutputStream();
-//        yuvImage.compressToJpeg(new Rect(0, 0, yuvImage.getWidth(), yuvImage.getHeight()), 75, out);
-//        byte[] imageBytes = out.toByteArray();
-//        return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length);
-//    }
+
 
 
     private Bitmap imageProxyToBitmap(ImageProxy image) {
@@ -436,141 +483,6 @@ public class MainActivity extends AppCompatActivity {
 
 
 
-
-
-//    private Bitmap imageProxyToBitmap(ImageProxy image) {
-//        @SuppressLint("UnsafeOptInUsageError")
-//        Image.Plane[] planes = image.getImage().getPlanes();
-//        ByteBuffer yBuffer = planes[0].getBuffer();
-//        ByteBuffer uBuffer = planes[1].getBuffer();
-//        ByteBuffer vBuffer = planes[2].getBuffer();
-//
-//        int ySize = yBuffer.remaining();
-//        int uSize = uBuffer.remaining();
-//        int vSize = vBuffer.remaining();
-//
-//        byte[] yuvBytes = new byte[ySize + uSize + vSize];
-//
-//        yBuffer.get(yuvBytes, 0, ySize);
-//        vBuffer.get(yuvBytes, ySize, vSize);
-//        uBuffer.get(yuvBytes, ySize + vSize, uSize);
-//
-//        Mat yuvMat = new Mat(new Size(image.getWidth(), image.getHeight() + image.getHeight() / 2), CvType.CV_8UC1);
-//        yuvMat.put(0, 0, yuvBytes);
-//
-//        Mat rgbMat = new Mat();
-//        Imgproc.cvtColor(yuvMat, rgbMat, Imgproc.COLOR_YUV2RGB_NV12);
-//
-//        Bitmap bmp = Bitmap.createBitmap(rgbMat.cols(), rgbMat.rows(), Bitmap.Config.ARGB_8888);
-//        Utils.matToBitmap(rgbMat, bmp);
-//
-//        return bmp;
-//    }
-
-//    private Bitmap imageProxyToBitmap(ImageProxy image) {
-//        @SuppressLint("UnsafeOptInUsageError")
-//        Image.Plane[] planes = image.getImage().getPlanes();
-//        ByteBuffer yBuffer = planes[0].getBuffer();
-//        ByteBuffer uBuffer = planes[1].getBuffer();
-//        ByteBuffer vBuffer = planes[2].getBuffer();
-//
-//        int ySize = yBuffer.remaining();
-//        int uSize = uBuffer.remaining();
-//        int vSize = vBuffer.remaining();
-//
-//        byte[] nv21 = new byte[ySize + uSize + vSize];
-//        yBuffer.get(nv21, 0, ySize);
-//        vBuffer.get(nv21, ySize, vSize);
-//        uBuffer.get(nv21, ySize + vSize, uSize);
-//
-//        YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, image.getWidth(), image.getHeight(), null);
-//        ByteArrayOutputStream out = new ByteArrayOutputStream();
-//        yuvImage.compressToJpeg(new Rect(0, 0, yuvImage.getWidth(), yuvImage.getHeight()), 90, out);
-//        byte[] imageBytes = out.toByteArray();
-//
-//        return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length);
-//    }
-
-
-
-//    private Bitmap yuv420ToBitmap(ByteBuffer yBuffer, ByteBuffer uBuffer, ByteBuffer vBuffer, int width, int height) {
-//        int ySize = yBuffer.remaining();
-//        int uSize = uBuffer.remaining();
-//        int vSize = vBuffer.remaining();
-//
-//        byte[] nv21 = new byte[ySize + uSize + vSize * 2];
-//
-//        yBuffer.get(nv21, 0, ySize);
-//
-//        for (int i = 0; i < uSize; i++) {
-//            nv21[ySize + (i * 2)] = vBuffer.get(i);
-//            nv21[ySize + (i * 2) + 1] = uBuffer.get(i);
-//        }
-//
-//        YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, width, height, null);
-//        ByteArrayOutputStream out = new ByteArrayOutputStream();
-//        yuvImage.compressToJpeg(new Rect(0, 0, width, height), 100, out);
-//
-//        byte[] imageBytes = out.toByteArray();
-//        return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length);
-//    }
-//
-//    private Bitmap imageProxyToBitmap(ImageProxy image) {
-//        @SuppressLint("UnsafeOptInUsageError")
-//        Image.Plane[] planes = image.getImage().getPlanes();
-//        ByteBuffer yBuffer = planes[0].getBuffer();
-//        ByteBuffer uBuffer = planes[1].getBuffer();
-//        ByteBuffer vBuffer = planes[2].getBuffer();
-//
-//
-//
-//        return yuv420ToBitmap(yBuffer, uBuffer, vBuffer, image.getWidth(), image.getHeight());
-//    }
-
-//    private Bitmap imageProxyToBitmap(ImageProxy image, Context context) {
-//        if (image.getFormat() != ImageFormat.YUV_420_888) {
-//            throw new IllegalArgumentException("Unsupported format");
-//        }
-//
-//        RenderScript rs = RenderScript.create(context);
-//        ScriptIntrinsicYuvToRGB yuvToRgbScript = ScriptIntrinsicYuvToRGB.create(rs, Element.U8_4(rs));
-//
-//        Type.Builder yuvType = new Type.Builder(rs, Element.U8(rs)).setX(image.getWidth()).setY(image.getHeight()).setYuvFormat(ImageFormat.YUV_420_888);
-//        Allocation in = Allocation.createTyped(rs, yuvType.create(), Allocation.USAGE_SCRIPT);
-//
-//        Type.Builder rgbaType = new Type.Builder(rs, Element.RGBA_8888(rs)).setX(image.getWidth()).setY(image.getHeight());
-//        Allocation out = Allocation.createTyped(rs, rgbaType.create(), Allocation.USAGE_SCRIPT);
-//
-//        in.copyFrom(getYuvBytes(image));
-//
-//        yuvToRgbScript.setInput(in);
-//        yuvToRgbScript.forEach(out);
-//
-//        Bitmap bitmap = Bitmap.createBitmap(image.getWidth(), image.getHeight(), Bitmap.Config.ARGB_8888);
-//        out.copyTo(bitmap);
-//
-//        rs.destroy();
-//
-//        return bitmap;
-//    }
-//
-//    private byte[] getYuvBytes(ImageProxy image) {
-//        @SuppressLint("UnsafeOptInUsageError")
-//        Image.Plane[] planes = image.getImage().getPlanes();
-//        byte[] yuvBytes = new byte[image.getWidth() * image.getHeight() * ImageFormat.getBitsPerPixel(ImageFormat.YUV_420_888) / 8];
-//        int dstIndex = 0;
-//
-//        for (int i = 0; i < planes.length; i++) {
-//            ByteBuffer buffer = planes[i].getBuffer();
-//            byte[] bytes = new byte[buffer.remaining()];
-//            buffer.get(bytes);
-//
-//            for (int j = 0; j < bytes.length; j++) {
-//                yuvBytes[dstIndex++] = bytes[j];
-//            }
-//        }
-//        return yuvBytes;
-//    }
 
 
 }
