@@ -1,12 +1,16 @@
 package com.example.mobileclassifiertest;
 
+import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Matrix;
+import android.media.Image;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
@@ -14,9 +18,29 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.TextView;
+
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.camera.core.Camera;
+import androidx.camera.core.CameraSelector;
+import androidx.camera.core.ImageAnalysis;
+import androidx.camera.core.ImageProxy;
+import androidx.camera.core.Preview;
+import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.camera.view.PreviewView;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+import androidx.lifecycle.LifecycleOwner;
 
+import com.google.common.util.concurrent.ListenableFuture;
+
+import org.opencv.android.OpenCVLoader;
+import org.opencv.android.Utils;
+import org.opencv.core.CvType;
+import org.opencv.core.Mat;
+import org.opencv.core.Size;
+import org.opencv.imgproc.Imgproc;
 import org.pytorch.IValue;
 import org.pytorch.LiteModuleLoader;
 import org.pytorch.Module;
@@ -32,20 +56,36 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final int REQUEST_LOAD_MODEL = 1;
     private static final int REQUEST_LOAD_CLASSES = 2;
     private static final int REQUEST_LOAD_IMAGE = 3;
+    private static final int REQUEST_RUN_CAMERA = 4;
+    private static final String TAG = "main";
+
+    private ListenableFuture<ProcessCameraProvider> cameraProviderFuture;
+
+    private int REQUEST_CODE_PERMISSION = 101;
+    private final String[] REQUIRED_PERMISSIONS = new String[] {"android.permissions.CAMERA"};
 
     private Button btnLoadModel;
     private Button btnLoadClasses;
     private Button btnLoadImage;
     private ImageView imagePreview;
     private TextView tvResult;
+    private PreviewView previewView;
+    private Button btnRunCamera;
+    private List<String> classes;
+    private View previewContainer;
+    private View imageViewContainer;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -55,8 +95,34 @@ public class MainActivity extends AppCompatActivity {
         btnLoadModel = findViewById(R.id.btn_load_model);
         btnLoadClasses = findViewById(R.id.btn_load_classes);
         btnLoadImage = findViewById(R.id.btn_load_image);
+        btnRunCamera = findViewById(R.id.btn_run_camera);
+
         imagePreview = findViewById(R.id.image_preview);
+        previewView = findViewById(R.id.preview_view);
         tvResult = findViewById(R.id.tv_result);
+
+        previewContainer = findViewById(R.id.preview_container);
+        imageViewContainer = findViewById(R.id.imageView_container);
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
+                || ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            // Request the permissions if they are not granted.
+            ActivityCompat.requestPermissions(this, new String[]{
+                    Manifest.permission.CAMERA,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+            }, REQUEST_CODE_PERMISSION);
+        } else {
+            // Permissions are already granted.
+            // Proceed with your app's functionality.
+        }
+
+
+
+        if (!OpenCVLoader.initDebug()) {
+            Log.e(TAG, "OpenCV initialization failed.");
+        } else {
+            Log.d(TAG, "OpenCV initialization succeeded.");
+        }
 
         btnLoadModel.setOnClickListener(v -> {
             // Logic to load PyTorch model
@@ -74,17 +140,45 @@ public class MainActivity extends AppCompatActivity {
         });
 
         btnLoadImage.setOnClickListener(v -> {
+            LoadTorchModule("model.ptl");
+            classes = LoadClasses("classes.txt");
+            previewContainer.setVisibility(View.INVISIBLE);
+            imageViewContainer.setVisibility(View.VISIBLE);
             // Logic to load Image to Classify
             Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
             intent.setType("image/*");
             startActivityForResult(intent, REQUEST_LOAD_IMAGE);
         });
 
-        File file = new File(this.getFilesDir(),"model.ptl");
-        boolean result = file.delete();
+        btnRunCamera.setOnClickListener(v -> {
+            LoadTorchModule("model.ptl");
+            classes = LoadClasses("classes.txt");
+            previewContainer.setVisibility(View.VISIBLE);
+            imageViewContainer.setVisibility(View.INVISIBLE);
 
-        File file2 = new File(this.getFilesDir(),"classes.ptl");
-        boolean result2 = file.delete();
+            // start camera and run model
+            if (checkPermissions()) {
+                ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSION);
+            }
+
+            cameraProviderFuture = ProcessCameraProvider.getInstance(this);
+            cameraProviderFuture.addListener(() -> {
+                try {
+                    ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
+                    startCamera(cameraProvider);
+                } catch (ExecutionException | InterruptedException e) {
+                    // errors
+                }
+            }, ContextCompat.getMainExecutor(this));
+        });
+
+
+
+//        File file = new File(this.getFilesDir(),"model.ptl");
+//        boolean result = file.delete();
+//
+//        File file2 = new File(this.getFilesDir(),"classes.ptl");
+//        boolean result2 = file.delete();
 
     }
 
@@ -111,22 +205,22 @@ public class MainActivity extends AppCompatActivity {
 //                        imagePreview.setImageBitmap(bitmap);
 
                         // After loading the image, you'd typically process it and display the result
-                        processImage(bitmap);
+                        processImage(bitmap, true);
 
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
+
                     break;
             }
         }
     }
 
-    private void processImage(Bitmap bitmap) {
+    private void processImage(Bitmap bitmap, boolean showImg) {
 
 
 
-        List<String> classes = LoadClasses("classes.txt");
-        LoadTorchModule("model.ptl");
+
 
 //
         float[] mean_norm = TensorImageUtils.TORCHVISION_NORM_MEAN_RGB;
@@ -137,7 +231,10 @@ public class MainActivity extends AppCompatActivity {
 
         // Center Crop to 224x224
         Bitmap croppedBitmap = centerCropTo224x224(resizedBitmap);
-        imagePreview.setImageBitmap(croppedBitmap);
+
+        if (showImg) {
+            imagePreview.setImageBitmap(croppedBitmap);
+        }
 
         // Convert cropped Bitmap to Tensor
         Tensor inputTensor =  TensorImageUtils.bitmapToFloat32Tensor(croppedBitmap, mean_norm, std_norm);
@@ -170,7 +267,6 @@ public class MainActivity extends AppCompatActivity {
         File modelFile = new File(this.getFilesDir(), fileName);
         String path = modelFile.getAbsolutePath();
 
-//        String path = assetFilePath(this, "model.ptl");
 
         module = LiteModuleLoader.load(path);
     }
@@ -193,7 +289,6 @@ public class MainActivity extends AppCompatActivity {
         try {
             File file = new File(getFilesDir(), fileName);
             BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(file)));
-//            BufferedReader br = new BufferedReader(new InputStreamReader(getAssets().open(fileName)));
             String line;
             while ((line = br.readLine()) != null){
                 classes.add(line);
@@ -281,22 +376,120 @@ public class MainActivity extends AppCompatActivity {
     }
 
 
-    public static String assetFilePath(Context context, String assetName) throws IOException {
-        File file = new File(context.getFilesDir(), assetName);
-        if (file.exists() && file.length() > 0) {
-            return file.getAbsolutePath();
+    private boolean checkPermissions() {
+        for (String permission : REQUIRED_PERMISSIONS){
+            if (ContextCompat.checkSelfPermission(this,permission) != PackageManager.PERMISSION_GRANTED){
+                return false;
+            }
+        }
+        return true;
+    }
+
+
+    Executor executor = Executors.newSingleThreadExecutor();
+
+    void startCamera(@NonNull ProcessCameraProvider cameraProvider) {
+        Preview preview = new Preview.Builder().build();
+        CameraSelector cameraSelector = new CameraSelector.Builder().requireLensFacing(CameraSelector.LENS_FACING_BACK).build();
+        preview.setSurfaceProvider(previewView.getSurfaceProvider());
+
+        ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
+//                .setTargetResolution(new android.util.Size(256,256))
+                .setTargetResolution(new android.util.Size(765, 1020))
+//                .setTargetResolution(new android.util.Size(3060,4080))
+//                .setTargetResolution(new android.util.Size(224,224))
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build();
+
+        imageAnalysis.setAnalyzer(executor, new ImageAnalysis.Analyzer() {
+            @Override
+            public void analyze(@NonNull ImageProxy image) {
+                int rotation = image.getImageInfo().getRotationDegrees();
+                analyzeImage(image, rotation);
+                image.close();
+            }
+        });
+
+        Camera camera = cameraProvider.bindToLifecycle((LifecycleOwner) this, cameraSelector, preview, imageAnalysis);
+    }
+
+    void analyzeImage(ImageProxy image, int rotation)
+    {
+        Bitmap bitmap = imageProxyToBitmap(image);
+        processImage(bitmap, false);
+
+    }
+
+    private Bitmap imageProxyToBitmap(ImageProxy image) {
+        @SuppressLint("UnsafeOptInUsageError")
+        Image.Plane[] planes = image.getImage().getPlanes();
+
+        // Luminance plane (Y)
+        ByteBuffer yBuffer = planes[0].getBuffer();
+        int ySize = yBuffer.remaining();
+        byte[] yBytes = new byte[ySize];
+        yBuffer.get(yBytes);
+
+        // U and V planes
+        ByteBuffer uBuffer = planes[1].getBuffer();
+        ByteBuffer vBuffer = planes[2].getBuffer();
+
+        // Strides
+        int yPixelStride = planes[0].getPixelStride();
+        int yRowStride = planes[0].getRowStride();
+        int uvPixelStride = planes[1].getPixelStride();
+        int uvRowStride = planes[1].getRowStride();
+
+        int width = image.getWidth();
+        int height = image.getHeight();
+
+        byte[] yuvBytes = new byte[width * height * 3 / 2];
+
+        int yPos = 0;
+        for (int row = 0; row < height; row++) {
+            int srcRowOffset = yRowStride * row;
+            System.arraycopy(yBytes, srcRowOffset, yuvBytes, yPos, width);
+            yPos += width;
         }
 
-        try (InputStream is = context.getAssets().open(assetName)) {
-            try (OutputStream os = new FileOutputStream(file)) {
-                byte[] buffer = new byte[4 * 1024];
-                int read;
-                while ((read = is.read(buffer)) != -1) {
-                    os.write(buffer, 0, read);
-                }
-                os.flush();
+        byte[] uBytes = new byte[uBuffer.remaining()];
+        uBuffer.get(uBytes);
+
+        byte[] vBytes = new byte[vBuffer.remaining()];
+        vBuffer.get(vBytes);
+
+        int uvPos = width * height;
+        for (int row = 0; row < height / 2; row++) {
+            for (int col = 0; col < width / 2; col++) {
+                yuvBytes[uvPos++] = vBytes[row * uvRowStride + col * uvPixelStride];
+                yuvBytes[uvPos++] = uBytes[row * uvRowStride + col * uvPixelStride];
             }
-            return file.getAbsolutePath();
+        }
+
+        Mat yuvMat = new Mat(new Size(width, height + height / 2), CvType.CV_8UC1);
+        yuvMat.put(0, 0, yuvBytes);
+
+        Mat rgbMat = new Mat();
+        Imgproc.cvtColor(yuvMat, rgbMat, Imgproc.COLOR_YUV2RGB_NV21);
+
+        Bitmap bmp = Bitmap.createBitmap(rgbMat.cols(), rgbMat.rows(), Bitmap.Config.ARGB_8888);
+        Utils.matToBitmap(rgbMat, bmp);
+
+        yuvMat.release();
+        rgbMat.release();
+
+        return bmp;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_CODE_PERMISSION) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                // Permission was granted. Proceed with your app's functionality.
+            } else {
+                // Permission denied by the user. You may inform the user about why the permission is needed.
+            }
         }
     }
 
